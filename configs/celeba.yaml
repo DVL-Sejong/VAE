@@ -7,8 +7,8 @@ model_params:
 exp_params:
   data_path: "./data/"
   model_path: "./models/"
-  exp_name: "vae"
+  exp_name: "celeba"
   img_size: 64
   batch_size: 144
-  LR: 0.005
+  LR: 0.0005
   epochs: 20

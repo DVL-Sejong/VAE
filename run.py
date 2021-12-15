@@ -1,4 +1,4 @@
-from vae import VAEDataLoader, VanillaVAE
+from vae import CelebALoader, CelebAVAE
 from progress.bar import IncrementalBar
 from os.path import abspath, join
 from pathlib import Path
@@ -20,7 +20,7 @@ def parse_args():
                         dest="filename",
                         metavar='FILE',
                         help='path to the config file',
-                        default='configs/vae.yaml')
+                        default='configs/celeba.yaml')
 
     args = parser.parse_args()
 
@@ -72,29 +72,39 @@ def print_loss_dict(loss_dict: dict, break_line=True):
         print()
 
 
-def experiment(model: VanillaVAE, data_loader: VAEDataLoader, device: torch.device,
+def experiment(model: CelebAVAE, loader_dict: dict, device: torch.device,
                batch_size: int, learning_rate: float, epochs: int,
                model_path: str, exp_name: str):
     model.to(device)
     params = model.parameters()
 
     optimizer = optim.Adam(params, lr=learning_rate)
-    loss_df = init_loss_df()
+    train_loss_df = init_loss_df()
+    val_loss_df = init_loss_df()
 
-    train_loader = data_loader.get_data_loader()
+    train_loader = loader_dict['train']
+    val_loader = loader_dict['val']
+    test_loader = loader_dict['test']
+
     kld_weight = batch_size / data_loader.num_train_imgs
 
     for epoch in range(epochs):
-        model, optimizer, loss_dict = train(epoch, model, train_loader, optimizer, kld_weight)
-        loss_df = update_loss_df(loss_df, loss_dict, epoch)
+        model, optimizer, loss_dict = train(epoch, model, train_loader, optimizer, kld_weight, device)
+        train_loss_df = update_loss_df(train_loss_df, loss_dict, epoch)
+        val_loss_dict = validate(model, val_loader, kld_weight, device)
+        val_loss_df = update_loss_df(val_loss_df, val_loss_dict, epoch)
 
     Path(abspath(model_path)).mkdir(exist_ok=True, parents=True)
     model_path = join(abspath(model_path), f'{exp_name}.pt')
     model.save(model_path)
     print(f'save trained model to {model_path}')
 
+    test_loss_dict = test(model, test_loader, kld_weight, device)
 
-def train(epoch: int, model: VanillaVAE, train_loader: DataLoader, optimizer: optim.Adam, kld_weight: float):
+
+def train(epoch: int, model: CelebAVAE, train_loader: DataLoader, optimizer: optim.Adam,
+          kld_weight: float, device: torch.device):
+    print(f'===========Epoch: {epoch:>3}')
     loss_df = init_loss_df()
     time_start = time.time()
 
@@ -103,8 +113,7 @@ def train(epoch: int, model: VanillaVAE, train_loader: DataLoader, optimizer: op
     optimizer.zero_grad()
 
     bar = IncrementalBar(f'Epoch: {epoch:>3}', max=len(train_loader))
-    for i, batch in enumerate(train_loader):
-        real_img, labels = batch
+    for i, (real_img, labels) in enumerate(train_loader):
         real_img = real_img.to(device)
         labels = labels.to(device)
 
@@ -120,9 +129,6 @@ def train(epoch: int, model: VanillaVAE, train_loader: DataLoader, optimizer: op
     time_end = time.time()
     bar.finish()
 
-    print(f'loss_df')
-    print(loss_df)
-
     loss_dict = get_mean_loss_dict(loss_df)
     print_loss_dict(loss_dict, break_line=False)
 
@@ -130,21 +136,64 @@ def train(epoch: int, model: VanillaVAE, train_loader: DataLoader, optimizer: op
     return model, optimizer, loss_dict
 
 
+def validate(model: CelebAVAE, val_loader: DataLoader, kdl_weight: float, device: torch.device):
+    loss_df = init_loss_df()
+
+    model.eval()
+
+    with torch.no_grad():
+        for i, (real_img, labels) in enumerate(val_loader):
+            real_img = real_img.to(device)
+            labels = labels.to(device)
+
+            recons, input, mu, log_var = model.forward(real_img, labels=labels)
+            loss_dict = model.loss_function(recons, input, mu, log_var, kld_weight=kdl_weight)
+            loss_df = update_loss_df(loss_df, loss_dict, i)
+
+        print(f'=========Validate() ', end='')
+        loss_dict = get_mean_loss_dict(loss_df)
+        print_loss_dict(loss_dict, break_line=False)
+
+    return loss_dict
+
+
+def test(model: CelebAVAE, test_loader: DataLoader, kdl_weight: float, device: torch.device):
+    loss_df = init_loss_df()
+
+    model.test()
+
+    with torch.no_grad():
+        for i, (real_img, labels) in enumerate(test_loader):
+            real_img = real_img.to(device)
+            labels = labels.to(device)
+
+            recons, input, mu, log_var = model.forward(real_img, labels=labels)
+            loss_dict = model.loss_function(recons, input, mu, log_var, kld_weight=kdl_weight)
+            loss_df = update_loss_df(loss_df, loss_dict, i)
+
+        print(f'=========Test() ', end='')
+        loss_dict = get_mean_loss_dict(loss_df)
+        print_loss_dict(loss_dict, break_line=False)
+
+    return loss_dict
+
+
 if __name__ == '__main__':
     config = parse_args()
     manual_seed(**config)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f'set device to {device}')
+    print(f'set device on {device}')
 
-    data_loader = VAEDataLoader(batch_size=config['exp_params']['batch_size'],
+    data_loader = CelebALoader(batch_size=config['exp_params']['batch_size'],
                                 img_size=config['exp_params']['img_size'],
                                 data_path=config['exp_params']['data_path'])
-    model = VanillaVAE(in_channels=config['model_params']['in_channels'],
+    model = CelebAVAE(in_channels=config['model_params']['in_channels'],
                        latent_dim=config['model_params']['latent_dim'],
                        hidden_dims=None)
 
+    loader_dict = data_loader.get_data_loader()
     experiment(model=model,
-               data_loader=data_loader,
+               loader_dict=loader_dict,
                device=device,
                batch_size=config['exp_params']['batch_size'],
                learning_rate=config['exp_params']['LR'],
