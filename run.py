@@ -120,6 +120,9 @@ def train(epoch: int, model: VanillaVAE, train_loader: DataLoader, optimizer: op
     time_end = time.time()
     bar.finish()
 
+    print(f'loss_df')
+    print(loss_df)
+
     loss_dict = get_mean_loss_dict(loss_df)
     print_loss_dict(loss_dict, break_line=False)
 
