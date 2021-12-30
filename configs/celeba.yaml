@@ -6,9 +6,9 @@ model_params:
 
 exp_params:
   data_path: "./data/"
-  model_path: "./models/"
+  model_path: "./models/celeba/"
   exp_name: "celeba"
   img_size: 64
   batch_size: 144
   LR: 0.0005
-  epochs: 20
+  epochs: 200
