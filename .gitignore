@@ -133,3 +133,9 @@ configs/
 
 #data
 data/
+
+# models
+models/
+
+# results
+results/
