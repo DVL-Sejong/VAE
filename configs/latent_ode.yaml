@@ -18,7 +18,6 @@ exp_params:
   data_path: "./data/latent_ode/"
   model_path: "./models/latent_ode/"
   exp_name: "test1"
-  img_size: 64
   batch_size: 32
   LR: 0.0005
   epochs: 500
