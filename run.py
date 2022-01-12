@@ -1,10 +1,11 @@
-from vae import CelebALoader, CelebAVAE, LatentODELoader, LatentVAE
-from progress.bar import IncrementalBar
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from os.path import abspath, join
+
+from vae import CelebALoader, CelebAVAE, LatentODELoader, LatentVAE, LossLogger, Tensor
+from os.path import abspath, join, isdir
 from pathlib import Path
 
-import pandas as pd
 import numpy as np
 import argparse
 import yaml
@@ -21,7 +22,7 @@ def parse_args():
                         dest="filename",
                         metavar='FILE',
                         help='path to the config file',
-                        default='configs/celeba.yaml')
+                        default='configs/latent_ode_220112_1.yaml')
 
     args = parser.parse_args()
 
@@ -37,116 +38,39 @@ def manual_seed(**kwargs):
     torch.manual_seed(seed)
     np.random.seed(seed)
     print(f'Manual seed to {seed}')
-    print()
 
 
-def init_loss_df():
-    loss_df = pd.DataFrame(columns=['index', 'loss', 'reconstruction_loss', 'kl-divergence'])
-    loss_df = loss_df.set_index('index')
-    return loss_df
+def set_device(**kwargs):
+    device = torch.device(kwargs['model_params']['device'] if torch.cuda.is_available() else 'cpu')
+    print(f'set device on {device}')
+
+    return device
 
 
-def update_loss_df(loss_df: pd.DataFrame, loss_dict: dict, epoch: int):
-    loss_df.loc[epoch] = {'loss': loss_dict['loss'].item(),
-                          'reconstruction_loss': loss_dict['reconstruction_loss'].item(),
-                          'kl-divergence': loss_dict['kl-divergence'].item()}
-    return loss_df
+def set_model_paths(**kwargs):
+    result_path = kwargs['exp_params']['result_path']
+    exp_name = kwargs['exp_params']['exp_name']
+
+    exp_path = join(abspath(result_path), exp_name)
+    if isdir(exp_path):
+        raise FileExistsError(f'{exp_path} already exists')
+
+    path_dict = {'exp': exp_path,
+                 'train': join(exp_path, 'train'),
+                 'val': join(exp_path, 'val'),
+                 'test': join(exp_path, 'test')}
+    mkdir_paths(path_dict)
+
+    return path_dict
 
 
-def get_mean_loss_dict(loss_df: pd.DataFrame):
-    loss_dict = {'loss': np.mean(loss_df['loss'].to_list()),
-                 'reconstruction_loss': np.mean(loss_df['reconstruction_loss'].to_list()),
-                 'kl-divergence': np.mean(loss_df['kl-divergence'].to_list())}
-    return loss_dict
+def mkdir_paths(path_dict):
+    for key, path in path_dict.items():
+        Path(path).mkdir(exist_ok=True, parents=True)
+        print(f'Make directory under {path}')
 
 
-def print_loss_dict(loss_dict: dict, break_line=True):
-    loss = loss_dict['loss'].item()
-    reconstruction_loss = loss_dict['reconstruction_loss'].item()
-    kld = loss_dict['kl-divergence'].item()
-
-    print(f'loss: {loss:4.8f}, '
-          f'reconstruction loss: {reconstruction_loss:4.8f}, '
-          f'kl-divergence: {kld:4.8f}')
-
-    if break_line:
-        print()
-
-
-def experiment(model, data_loader, device: torch.device,
-               batch_size: int, learning_rate: float, epochs: int,
-               model_path: str, exp_name: str):
-    model.to(device)
-    params = model.parameters()
-
-    loader_dict = data_loader.get_data_loader()
-
-    optimizer = optim.Adam(params, lr=learning_rate)
-    train_loss_df = init_loss_df()
-    val_loss_df = init_loss_df()
-    test_loss_df = init_loss_df()
-
-    train_loader = loader_dict['train']
-    val_loader = loader_dict['val']
-    test_loader = loader_dict['test']
-
-    train_path = join(abspath(model_path), exp_name, 'train')
-    Path(train_path).mkdir(exist_ok=True, parents=True)
-    val_path = join(abspath(model_path), exp_name, 'val')
-    Path(val_path).mkdir(exist_ok=True, parents=True)
-    test_path = join(abspath(model_path), exp_name, 'test')
-    Path(test_path).mkdir(exist_ok=True, parents=True)
-
-    if data_loader.num_train_imgs is not None:
-        kld_weight = batch_size / data_loader.num_train_imgs
-    else:
-        kld_weight = None
-
-    for epoch in range(epochs):
-        model, optimizer, loss_dict = train(epoch, model, train_loader, optimizer, kld_weight, train_path, device)
-        train_loss_df = update_loss_df(train_loss_df, loss_dict, epoch)
-        val_loss_dict = validate(epoch, model, val_loader, kld_weight, val_path, device)
-        val_loss_df = update_loss_df(val_loss_df, val_loss_dict, epoch)
-
-    Path(join(abspath(model_path), exp_name)).mkdir(exist_ok=True, parents=True)
-    model_path = join(abspath(model_path), exp_name,  f'{exp_name}.pt')
-    torch.save(model, model_path)
-    print(f'save trained model to {model_path}')
-
-    test_loss_dict = test(model, test_loader, kld_weight, test_path, device)
-    test_loss_df = update_loss_df(test_loss_df, test_loss_dict, -1)
-
-    train_loss_df.to_csv(join(abspath(model_path), exp_name, 'train_loss.csv'))
-    val_loss_df.to_csv(join(abspath(model_path), exp_name, 'val_loss.csv'))
-    test_loss_df.to_csv(join(abspath(model_path), exp_name, 'test_loss.csv'))
-    print(f'save train/val/test loss files under {join(abspath(model_path), exp_name)}')
-
-
-def train(epoch: int, model, train_loader: DataLoader, optimizer: optim.Adam,
-          kld_weight: float, train_path: str, device: torch.device):
-    print(f'===========Epoch: {epoch:>3}')
-    loss_df = init_loss_df()
-    time_start = time.time()
-
-    model.train()
-    model.zero_grad()
-    optimizer.zero_grad()
-
-    for i, (data1, data2) in enumerate(train_loader):
-        data1 = data1.to(device)
-        data2 = data2.to(device)
-
-        data2_name = 'labels' if isinstance(model, CelebAVAE) else 'timestamp'
-        recons, input, mu, log_var = model.forward({'data': data1, data2_name: data2})
-
-        loss_dict = model.loss_function(recons, input, mu, log_var,
-                                        kld_weight=kld_weight,
-                                        device=device)
-        loss_df = update_loss_df(loss_df, loss_dict, i)
-        train_loss = loss_dict['loss']
-        train_loss.backward()
-        optimizer.step()
-
+def plot_result(recons: Tensor, input, fig_path:str =None):
     with torch.no_grad():
         recons = recons.cpu().numpy()
         input = input.cpu().numpy()
@@ -154,29 +78,86 @@ def train(epoch: int, model, train_loader: DataLoader, optimizer: optim.Adam,
         input = input[0, 0, :, :]
 
         plt.figure()
-        plt.plot(input[:, 0], input[:, 1],
-                 'g', label='true trajectory')
-        plt.plot(recons[:, 0], recons[:, 1], 'c',
-                 label='learned trajectory')
+        plt.plot(input[:, 0], input[:, 1],'g', label='true trajectory')
+        plt.plot(recons[:, 0], recons[:, 1], 'c',label='learned trajectory')
         plt.legend()
-        fig_path = join(train_path, f'{epoch}.png')
-        plt.savefig(fig_path, dpi=500)
-        print(f'Saved visualization figure at {fig_path}')
 
-    time_end = time.time()
+        if fig_path is not None:
+            plt.savefig(fig_path, dpi=500)
 
-    loss_dict = get_mean_loss_dict(loss_df)
-    print_loss_dict(loss_dict, break_line=False)
-
-    print(f'Took {(time_end - time_start):.4f} sec')
-    return model, optimizer, loss_dict
+        plt.close()
 
 
-def validate(epoch: int, model, val_loader: DataLoader, kdl_weight: float, val_path: str, device: torch.device):
-    loss_df = init_loss_df()
+def save_model(model, model_path: str):
+    saving_path = join(model_path, f'model.pt')
+    torch.save(model, saving_path)
+    print(f'save trained model to {saving_path}')
 
+
+def experiment(model, data_loader, device: torch.device, logger: LossLogger,
+               batch_size: int, learning_rate: float, epochs: int):
+    model.to(device)
+    params = model.parameters()
+    optimizer = optim.Adam(params, lr=learning_rate)
+
+    loader_dict = data_loader.get_data_loader()
+
+    if data_loader.num_train_imgs is not None:
+        kld_weight = batch_size / data_loader.num_train_imgs
+    else:
+        kld_weight = None
+
+    for epoch in range(epochs):
+        print(f'===Epoch: {epoch:>3} ', end='')
+        time_start = time.time()
+        model, optimizer, logger = train(epoch, model, loader_dict['train'], optimizer, kld_weight, logger, device)
+        logger = validate(epoch, model, loader_dict['val'], kld_weight, logger, device)
+        logger.print_loss_by_epoch()
+
+        time_end = time.time()
+        print(f'Took {(time_end - time_start):.4f} sec')
+
+    print()
+
+    save_model(model, logger.path_dict['exp'])
+    logger = test(model, loader_dict['test'], kld_weight, logger, device)
+    logger.print_test_loss()
+
+
+def train(epoch: int, model, train_loader: DataLoader, optimizer: optim.Adam,
+          kld_weight: float, logger: LossLogger, device: torch.device):
+    model.train()
+    model.zero_grad()
+    optimizer.zero_grad()
+
+    logger.init_temp_loss()
+    for i, (data1, data2) in enumerate(train_loader):
+        data1 = data1.to(device)
+        data2 = data2.to(device)
+
+        data2_name = 'labels' if isinstance(model, CelebAVAE) else 'timestamp'
+        recons, input, mu, log_var = model.forward({'data': data1, data2_name: data2})
+        loss_dict = model.loss_function(recons, input, mu, log_var,
+                                        kld_weight=kld_weight,
+                                        device=device)
+        logger.update_temp_loss(loss_dict, i)
+        train_loss = loss_dict['loss']
+        train_loss.backward()
+        optimizer.step()
+
+    if epoch % 30 == 0:
+        fig_path = join(logger.path_dict['train'], f'{epoch}.png')
+        plot_result(recons, input, fig_path)
+
+    logger.mean_temp_loss()
+    logger.update_loss(epoch, 'train')
+    return model, optimizer, logger
+
+
+def validate(epoch: int, model, val_loader: DataLoader, kdl_weight: float, logger: LossLogger, device: torch.device):
     model.eval()
 
+    logger.init_temp_loss()
     with torch.no_grad():
         for i, (data1, data2) in enumerate(val_loader):
             data1 = data1.to(device)
@@ -187,36 +168,21 @@ def validate(epoch: int, model, val_loader: DataLoader, kdl_weight: float, val_p
             loss_dict = model.loss_function(recons, input, mu, log_var,
                                             kld_weight=kdl_weight,
                                             device=device)
-            loss_df = update_loss_df(loss_df, loss_dict, i)
+            logger.update_temp_loss(loss_dict, i)
 
-        print(f'=========Validate() ', end='')
-        loss_dict = get_mean_loss_dict(loss_df)
-        print_loss_dict(loss_dict, break_line=False)
+    if epoch % 30 == 0:
+        fig_path = join(logger.path_dict['val'], f'{epoch}.png')
+        plot_result(recons, input, fig_path)
 
-        recons = recons.cpu().numpy()
-        input = input.cpu().numpy()
-        recons = recons[0, 0, :, :]
-        input = input[0, 0, :, :]
-
-        plt.figure()
-        plt.plot(input[:, 0], input[:, 1],
-                 'g', label='true trajectory')
-        plt.plot(recons[:, 0], recons[:, 1], 'c',
-                 label='learned trajectory')
-        plt.legend()
-        fig_path = join(val_path, f'{epoch}.png')
-        plt.savefig(fig_path, dpi=500)
-        print(f'Saved visualization figure at {fig_path}')
-
-    return loss_dict
+    logger.mean_temp_loss()
+    logger.update_loss(epoch, 'val')
+    return logger
 
 
-def test(model, test_loader: DataLoader, kdl_weight: float,
-         test_path: str, device: torch.device):
-    loss_df = init_loss_df()
-
+def test(model, test_loader: DataLoader, kdl_weight: float, logger: LossLogger, device: torch.device):
     model.eval()
 
+    logger.init_temp_loss()
     with torch.no_grad():
         for i, (data1, data2) in enumerate(test_loader):
             data1 = data1.to(device)
@@ -227,31 +193,17 @@ def test(model, test_loader: DataLoader, kdl_weight: float,
             loss_dict = model.loss_function(recons, input, mu, log_var,
                                             kld_weight=kdl_weight,
                                             device=device)
-            loss_df = update_loss_df(loss_df, loss_dict, i)
+            logger.update_temp_loss(loss_dict, i)
 
-        print(f'=========Test() ', end='')
-        loss_dict = get_mean_loss_dict(loss_df)
-        print_loss_dict(loss_dict, break_line=False)
+            fig_path = join(logger.path_dict['test'], f'test_{i:>03}.png')
+            plot_result(recons, input, fig_path)
 
-        recons = recons.cpu().numpy()
-        input = input.cpu().numpy()
-        recons = recons[0, 0, :, :]
-        input = input[0, 0, :, :]
-
-        plt.figure()
-        plt.plot(input[:, 0], input[:, 1],
-                 'g', label='true trajectory')
-        plt.plot(recons[:, 0], recons[:, 1], 'c',
-                 label='learned trajectory')
-        plt.legend()
-        fig_path = join(test_path, f'test.png')
-        plt.savefig(fig_path, dpi=500)
-        print(f'Saved visualization figure at {fig_path}')
-
-    return loss_dict
+    logger.mean_temp_loss()
+    logger.update_loss(-1, 'test')
+    return logger
 
 
-def celeba_main(device: torch.device, **kwargs):
+def celeba_main(device: torch.device, path_dict: dict, **kwargs):
     model = CelebAVAE(in_channels=kwargs['model_params']['in_channels'],
                       latent_dim=kwargs['model_params']['latent_dim'],
                       hidden_dims=None)
@@ -260,17 +212,18 @@ def celeba_main(device: torch.device, **kwargs):
                                img_size=kwargs['exp_params']['img_size'],
                                data_path=kwargs['exp_params']['data_path'])
 
+    logger = LossLogger(path_dict)
+
     experiment(model=model,
                data_loader=data_loader,
                device=device,
+               logger=logger,
                batch_size=kwargs['exp_params']['batch_size'],
                learning_rate=kwargs['exp_params']['LR'],
-               epochs=kwargs['exp_params']['epochs'],
-               model_path=kwargs['exp_params']['model_path'],
-               exp_name=kwargs['exp_params']['exp_name'])
+               epochs=kwargs['exp_params']['epochs'])
 
 
-def latent_ode_main(device: torch.device, **kwargs):
+def latent_ode_main(device: torch.device, path_dict: dict, **kwargs):
     model = LatentVAE(batch_size=kwargs['exp_params']['batch_size'],
                       latent_dim=kwargs['model_params']['latent_dim'],
                       n_rnn_hidden=kwargs['model_params']['rnn_hidden_dim'],
@@ -283,26 +236,28 @@ def latent_ode_main(device: torch.device, **kwargs):
 
     data_loader = LatentODELoader(batch_size=kwargs['exp_params']['batch_size'],
                                   n_frames=kwargs['data_params']['n_frames'],
-                                  data_path=kwargs['exp_params']['data_path'],
                                   n_spiral=kwargs['data_params']['n_spiral'],
                                   n_total=kwargs['data_params']['n_total'],
                                   noise_std=kwargs['data_params']['noise_std'])
 
+    logger = LossLogger(path_dict)
+
     experiment(model=model,
                data_loader=data_loader,
                device=device,
+               logger=logger,
                batch_size=kwargs['exp_params']['batch_size'],
                learning_rate=kwargs['exp_params']['LR'],
-               epochs=kwargs['exp_params']['epochs'],
-               model_path=kwargs['exp_params']['model_path'],
-               exp_name=kwargs['exp_params']['exp_name'])
+               epochs=kwargs['exp_params']['epochs'])
 
 
 if __name__ == '__main__':
     config = parse_args()
     manual_seed(**config)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f'set device on {device}')
+    device = set_device(**config)
+    path_dict = set_model_paths(**config)
 
-    # celeba_main(device=device, **config)
-    latent_ode_main(device=device, **config)
+    if config['model'] == 'celeba':
+        celeba_main(device=device, path_dict=path_dict, **config)
+    elif config['model'] == 'latent_ode':
+        latent_ode_main(device=device, path_dict=path_dict, **config)

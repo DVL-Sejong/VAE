@@ -1,12 +1,13 @@
 seed: 1265
+model: "celeba"
 
 model_params:
   in_channels: 3
   latent_dim: 128
 
 exp_params:
+  result_path: "./results/"
   data_path: "./data/"
-  model_path: "./models/celeba/"
   exp_name: "celeba"
   img_size: 64
   batch_size: 144

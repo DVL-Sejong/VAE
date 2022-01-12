@@ -27,11 +27,10 @@ class ODEDataset(Dataset):
 
 class LatentODELoader:
 
-    def __init__(self, batch_size: int, n_frames: int, data_path: str,
+    def __init__(self, batch_size: int, n_frames: int,
                  n_spiral: int, n_total: int, noise_std: float):
         self.batch_size = batch_size
         self.n_frames = n_frames
-        self.data_path = data_path
 
         self.n_spiral = n_spiral
         self.n_total = n_total
