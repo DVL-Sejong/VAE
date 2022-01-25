@@ -73,20 +73,19 @@ def mkdir_paths(path_dict):
         print(f'Make directory under {path}')
 
 
-def plot_result(recons: Tensor, input, fig_path:str =None):
+def plot_spirals(spiral_dict: dict, figpath: str = None):
     with torch.no_grad():
-        recons = recons.cpu().numpy()
-        input = input.cpu().numpy()
-        recons = recons[0, 0, :, :]
-        input = input[0, 0, :, :]
-
         plt.figure()
-        plt.plot(input[:, 0], input[:, 1],'g', label='true trajectory')
-        plt.plot(recons[:, 0], recons[:, 1], 'c',label='learned trajectory')
+        for key, spiral in spiral_dict.items():
+            linewidth = 1 if 'first' in key or 'second' in key else 3
+            if isinstance(spiral, torch.Tensor):
+                spiral = spiral.cpu().numpy()[0][0]
+            plt.plot(spiral[:, 0], spiral[:, 1], label=f'spiral_{key}', linewidth=linewidth)
         plt.legend()
 
-        if fig_path is not None:
-            plt.savefig(fig_path, dpi=500)
+        if figpath is not None:
+            plt.savefig(figpath)
+            print(f'save spirals to {figpath}')
 
         plt.close()
 
@@ -98,7 +97,7 @@ def save_model(model, model_path: str):
 
 
 def experiment(model, data_loader, device: torch.device, logger: LossLogger,
-               batch_size: int, learning_rate: float, epochs: int):
+               batch_size: int, learning_rate: float, epochs: int, spiral_dict: dict = None):
     model.to(device)
     params = model.parameters()
     optimizer = optim.Adam(params, lr=learning_rate)
@@ -113,8 +112,8 @@ def experiment(model, data_loader, device: torch.device, logger: LossLogger,
     for epoch in range(epochs):
         print(f'===Epoch: {epoch:>4} ', end='')
         time_start = time.time()
-        model, optimizer, logger = train(epoch, model, loader_dict['train'], optimizer, kld_weight, logger, device)
-        logger = validate(epoch, model, loader_dict['val'], kld_weight, logger, device)
+        model, optimizer, logger = train(epoch, model, loader_dict['train'], optimizer, kld_weight, logger, device, spiral_dict)
+        logger = validate(epoch, model, loader_dict['val'], kld_weight, logger, device, spiral_dict)
         logger.print_loss_by_epoch()
 
         time_end = time.time()
@@ -123,12 +122,14 @@ def experiment(model, data_loader, device: torch.device, logger: LossLogger,
     print()
 
     save_model(model, logger.path_dict['exp'])
-    logger = test(model, loader_dict['test'], kld_weight, logger, device)
+    logger = test(model, loader_dict['test'], kld_weight, logger, device, spiral_dict)
     logger.print_test_loss()
 
 
 def train(epoch: int, model, train_loader: DataLoader, optimizer: optim.Adam,
-          kld_weight: float, logger: LossLogger, device: torch.device):
+          kld_weight: float, logger: LossLogger, device: torch.device, spiral_dict: dict = None):
+    plot_dict = dict(spiral_dict)
+
     model.train()
     model.zero_grad()
     optimizer.zero_grad()
@@ -150,14 +151,17 @@ def train(epoch: int, model, train_loader: DataLoader, optimizer: optim.Adam,
 
     if epoch % 30 == 0:
         fig_path = join(logger.path_dict['train'], f'{epoch}.png')
-        plot_result(recons, input, fig_path)
+        plot_dict.update({'recons': recons, 'input': input})
+        plot_spirals(plot_dict, fig_path)
 
     logger.mean_temp_loss()
     logger.update_loss(epoch, 'train')
     return model, optimizer, logger
 
 
-def validate(epoch: int, model, val_loader: DataLoader, kdl_weight: float, logger: LossLogger, device: torch.device):
+def validate(epoch: int, model, val_loader: DataLoader, kdl_weight: float, logger: LossLogger, device: torch.device, spiral_dict: dict = None):
+    plot_dict = dict(spiral_dict)
+
     model.eval()
 
     logger.init_temp_loss()
@@ -175,14 +179,17 @@ def validate(epoch: int, model, val_loader: DataLoader, kdl_weight: float, logge
 
     if epoch % 30 == 0:
         fig_path = join(logger.path_dict['val'], f'{epoch}.png')
-        plot_result(recons, input, fig_path)
+        plot_dict.update({'recons': recons, 'input': input})
+        plot_spirals(plot_dict, fig_path)
 
     logger.mean_temp_loss()
     logger.update_loss(epoch, 'val')
     return logger
 
 
-def test(model, test_loader: DataLoader, kdl_weight: float, logger: LossLogger, device: torch.device):
+def test(model, test_loader: DataLoader, kdl_weight: float, logger: LossLogger, device: torch.device, spiral_dict: dict = None):
+    plot_dict = dict(spiral_dict)
+
     model.eval()
 
     logger.init_temp_loss()
@@ -199,7 +206,8 @@ def test(model, test_loader: DataLoader, kdl_weight: float, logger: LossLogger, 
             logger.update_temp_loss(loss_dict, i)
 
             fig_path = join(logger.path_dict['test'], f'test_{i:>03}.png')
-            plot_result(recons, input, fig_path)
+            plot_dict.update({'recons': recons, 'input': input})
+            plot_spirals(plot_dict, fig_path)
 
     logger.mean_temp_loss()
     logger.update_loss(-1, 'test')
@@ -243,6 +251,9 @@ def latent_ode_main(device: torch.device, path_dict: dict, **kwargs):
                                   n_total=kwargs['data_params']['n_total'],
                                   noise_std=kwargs['data_params']['noise_std'])
 
+    first_spiral, second_spiral = data_loader.get_spirals()
+    spiral_dict = {'first': first_spiral, 'second': second_spiral}
+
     logger = LossLogger(path_dict)
 
     experiment(model=model,
@@ -251,7 +262,8 @@ def latent_ode_main(device: torch.device, path_dict: dict, **kwargs):
                logger=logger,
                batch_size=kwargs['exp_params']['batch_size'],
                learning_rate=kwargs['exp_params']['LR'],
-               epochs=kwargs['exp_params']['epochs'])
+               epochs=kwargs['exp_params']['epochs'],
+               spiral_dict=spiral_dict)
 
 
 if __name__ == '__main__':

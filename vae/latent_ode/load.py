@@ -1,5 +1,6 @@
 from torch.utils.data import Dataset, DataLoader
 
+import matplotlib.pyplot as plt
 import numpy.random as npr
 import numpy as np
 import torch
@@ -104,3 +105,18 @@ class LatentODELoader:
 
     def get_data_loader(self):
         return {'train': self.train_loader, 'val': self.val_loader, 'test': self.test_loader}
+
+    def get_spirals(self):
+        return get_spirals(self.trajectories)
+
+
+def get_spirals(trajectories: np.ndarray):
+    first_spiral = trajectories[0]
+    second_spiral = None
+
+    for i in range(trajectories.shape[0]):
+        if not np.array_equal(first_spiral, trajectories[i]):
+            second_spiral = trajectories[i]
+            break
+
+    return first_spiral, second_spiral
