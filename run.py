@@ -10,6 +10,7 @@ import numpy as np
 import argparse
 import yaml
 import time
+import re
 
 from torch.utils.data import DataLoader
 import torch.optim as optim
@@ -25,8 +26,10 @@ def parse_args():
                         default='configs/latent_ode_220112_1.yaml')
 
     args = parser.parse_args()
+    filename = args.filename
+    filename = re.sub('\s+', '', filename)
 
-    with open(args.filename, 'r') as file:
+    with open(filename, 'r') as file:
         try:
             return yaml.safe_load(file)
         except yaml.YAMLError as exc:
@@ -108,7 +111,7 @@ def experiment(model, data_loader, device: torch.device, logger: LossLogger,
         kld_weight = None
 
     for epoch in range(epochs):
-        print(f'===Epoch: {epoch:>3} ', end='')
+        print(f'===Epoch: {epoch:>4} ', end='')
         time_start = time.time()
         model, optimizer, logger = train(epoch, model, loader_dict['train'], optimizer, kld_weight, logger, device)
         logger = validate(epoch, model, loader_dict['val'], kld_weight, logger, device)
@@ -232,7 +235,7 @@ def latent_ode_main(device: torch.device, path_dict: dict, **kwargs):
                       n_dec_hidden=kwargs['model_params']['dec_hidden_dim'],
                       n_hidden=kwargs['model_params']['hidden_dim'],
                       noise_std=kwargs['data_params']['noise_std'],
-                      device=device)
+                      device=device).cuda()
 
     data_loader = LatentODELoader(batch_size=kwargs['exp_params']['batch_size'],
                                   n_frames=kwargs['data_params']['n_frames'],
