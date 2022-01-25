@@ -4,6 +4,7 @@ from typing import List
 
 import numpy as np
 
+from torch.nn import functional as F
 import torch.nn as nn
 import torch
 
@@ -124,19 +125,15 @@ class LatentVAE(BaseVAE):
         return [output, input_tensor, mu, log_var]
 
     def loss_function(self, recons, input, mu, log_var, **kwargs):
-        noise_std_ = torch.zeros(recons.size()) + self.noise_std
-        noise_logvar = (2. * torch.log(noise_std_)).to(kwargs['device'])
-
-        logpx = torch.mean(log_normal_pdf(input, recons, noise_logvar).sum(-1).sum(-1))
+        recons_loss = F.mse_loss(recons, input)
         analytic_kl = torch.mean(normal_kl(mu,
                                            log_var,
                                            torch.zeros(mu.size()).to(kwargs['device']),
                                            torch.zeros(log_var.size()).to(kwargs['device']),
                                            device=kwargs['device']).sum(-1))
 
-        loss = torch.mean(-logpx + analytic_kl, dim=0)
-
-        return {'loss': loss, 'reconstruction_loss': -logpx, 'kl-divergence': analytic_kl}
+        loss = torch.mean(recons_loss + analytic_kl, dim=0)
+        return {'loss': loss, 'reconstruction_loss': recons_loss, 'kl-divergence': analytic_kl}
 
 
 def log_normal_pdf(x, mean, logvar):
