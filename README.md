@@ -10,17 +10,6 @@ The VAE code is based on [here](https://github.com/AntixK/PyTorch-VAE). The orig
 ```
 $ git clone https://github.com/DVL-Sejong/VAE
 $ cd VAE
-$ conda env create --file=environment.yaml
-$ conda activate VAE
-$ pip install -r requirements.txt
-$ python run.py
-```
-
-or, simply run this
-
-```
-$ git clone https://github.com/DVL-Sejong/VAE
-$ cd VAE
 $ bash run.sh
 ```
 

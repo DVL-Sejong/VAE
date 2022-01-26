@@ -23,12 +23,8 @@ class BaseVAE(nn.Module):
 
     @abstractmethod
     def forward(self, *inputs: Tensor) -> Tensor:
-        print(f'BaseVAE forward()')
         pass
 
     @abstractmethod
     def loss_function(self, *inputs: Any, **kwargs) -> Tensor:
         pass
-
-
-

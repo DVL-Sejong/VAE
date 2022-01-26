@@ -6,6 +6,7 @@ from os.path import abspath
 
 
 class CelebALoader:
+
     def __init__(self, batch_size: int, img_size: int, data_path: str):
         self.batch_size = batch_size
         self.img_size = img_size

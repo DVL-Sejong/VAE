@@ -1,6 +1,4 @@
 from torch.utils.data import Dataset, DataLoader
-from os.path import abspath, join
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy.random as npr
@@ -9,6 +7,7 @@ import torch
 
 
 class ODEDataset(Dataset):
+
     def __init__(self, trajectories: np.array, timestamp: np.array, n_frames: int):
         self.trajectories = trajectories
         self.timestamp = timestamp
@@ -28,11 +27,11 @@ class ODEDataset(Dataset):
 
 
 class LatentODELoader:
-    def __init__(self, batch_size: int, n_frames: int, data_path: str,
+
+    def __init__(self, batch_size: int, n_frames: int,
                  n_spiral: int, n_total: int, noise_std: float):
         self.batch_size = batch_size
         self.n_frames = n_frames
-        self.data_path = data_path
 
         self.n_spiral = n_spiral
         self.n_total = n_total
@@ -61,9 +60,12 @@ class LatentODELoader:
         start = 0.
         stop = 6 * np.pi
 
+        a = 0
+        b = .3
+
         trajectory = []
         for _ in range(self.n_spiral):
-            a, b = npr.uniform(), npr.uniform()
+            # a, b = npr.uniform(), npr.uniform()
             spiral = self._generate_spiral(start, stop, a, b, bool(npr.rand() > .5))
             trajectory.append(spiral)
 
@@ -104,12 +106,17 @@ class LatentODELoader:
     def get_data_loader(self):
         return {'train': self.train_loader, 'val': self.val_loader, 'test': self.test_loader}
 
+    def get_spirals(self):
+        return get_spirals(self.trajectories)
 
-if __name__ == '__main__':
-    latent_ode_loader = LatentODELoader(batch_size=32,
-                                        n_frames=5,
-                                        data_path='./data/latent_ode/',
-                                        n_spiral=14,
-                                        n_total=500,
-                                        noise_std=.1)
-    data_loader_dict = latent_ode_loader.get_data_loader()
+
+def get_spirals(trajectories: np.ndarray):
+    first_spiral = trajectories[0]
+    second_spiral = None
+
+    for i in range(trajectories.shape[0]):
+        if not np.array_equal(first_spiral, trajectories[i]):
+            second_spiral = trajectories[i]
+            break
+
+    return first_spiral, second_spiral

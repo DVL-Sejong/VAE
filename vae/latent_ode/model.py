@@ -4,6 +4,7 @@ from typing import List
 
 import numpy as np
 
+from torch.nn import functional as F
 import torch.nn as nn
 import torch
 
@@ -37,24 +38,14 @@ class RecognitionRNN(nn.Module):
         self.n_spiral = n_spiral
         self.n_channel = n_channel
 
-        # print(f'n_spiral: {n_spiral}, n_channel: {n_channel}')
-
         self.i2h = nn.Linear(n_spiral * n_channel * 2, n_spiral * n_channel)
         self.h2o = nn.Linear(n_spiral * n_channel, n_spiral * latent_dim * 2)
 
     def forward(self, x, h):
-        # print(f'RecognitionRNN')
-        # print(f'shape of x: {x.shape}')  # (144, 28)
-        # print(f'shape of h: {h.shape}')  # (144, 28)
         combined = torch.cat((x, h), dim=1)
-        # print(f'shape of combined: {combined.shape}')  # (144, 56)
         h = torch.tanh(self.i2h(combined))
-        # print(f'shape of h: {h.shape}')  # (144, hidden)
         out = self.h2o(h)
-        # print(f'shape of out: {out.shape}')  # (144, 112)
         out = out.view(-1, self.n_spiral, self.latent_dim * 2)
-        # print(f'shape of out: {out.shape}')  # (144, 14, 8)
-        # print()
         return out, h
 
     def init_hidden(self, input_data: Tensor):
@@ -77,6 +68,7 @@ class Decoder(nn.Module):
 
 
 class LatentVAE(BaseVAE):
+
     def __init__(self, batch_size: int,
                  latent_dim: int, n_rnn_hidden: int, n_spiral: int, n_channel: int,
                  n_dec_hidden: int, n_hidden: int, noise_std: float,
@@ -99,108 +91,67 @@ class LatentVAE(BaseVAE):
         self.func = LatentODEfunc(latent_dim, n_hidden).to(device)
 
     def encode(self, input: Tensor) -> List[Tensor]:
-        # print(f'encode()')
-        # print(f'shape of input: {input.shape}')  # (144, 14, 10, 2)
-
-        input = input.permute(0, 2, 1, 3)  # (144, 10, 14, 2)
+        input = input.permute(0, 2, 1, 3)
         input = torch.flatten(input, start_dim=2)
-        # print(f'shape of input: {input.shape}')   # (144, 10, 28)
 
         h = self.rec.init_hidden(input[:, 0, :]).to(self.device)
-        # print(f'shape of h: {h.shape}')
 
         for t in reversed(range(input.size(1))):
-            observation = input[:, t, :] # (144, 28)
-            # print(f'shape of observation: {observation.shape}')
+            observation = input[:, t, :]
             out, h = self.rec(observation, h)
 
-        # print(f'shape of out: {out.shape}')  # (144, 14, 8)
-        # print(f'shape of h: {h.shape}')  # (144, 14, 8)
         mu, log_var = out[:, :, :self.latent_dim], out[:, :, self.latent_dim:]
-        # print(f'shape of mu: {mu.shape}')  # (144, 14, 4)
-        # print(f'shape of log_var: {log_var.shape}')  # (144, 14, 4)
-        # print()
         return [mu, log_var]
 
     def decode(self, z: Tensor, **kwargs) -> Tensor:
-        # print(f'decode()')
-        # aa = type(kwargs['timestamp'])
-        # print(f'type of timestamp: {aa}')
-        # bb = kwargs['timestamp'].shape
-        # print(f'shape of timestamp: {bb}')
-
-        # print(f'shape of z: {z.shape}')
         result = odeint(self.func, z, kwargs['timestamp'][0])
-        # print(f'shape of odeint result: {result.shape}')  # (10, 144, 14, 4)
         result = result.permute(1, 2, 0, 3)
-        # print(f'shape of permute result: {result.shape}')  # (144, 14, 10, 4)
         result = self.dec(result)
-        # print(f'shape of decoded result: {result.shape}')  # TODO (144, 14, 10, 2)
-        # print()
-
-        # TODO it should be shaped as (144, 14, 10, 2)
         return result
 
     def reparameterize(self, mu: Tensor, logvar: Tensor) -> Tensor:
-        # print(f'reparameterize()')
-        # print(f'shape of mu: {mu.shape}')
-        # print(f'shape of logvar: {logvar.shape}')
         epsilon = torch.randn(mu.size()).to(self.device)
-        # print(f'shape of epsilon: {epsilon.shape}')
         z = epsilon * torch.exp(.5 * logvar) + mu
-        # print(f'shape of z: {z.shape}')
-        # print()
         return z
 
     def forward(self, input_data: dict):
-        # print('LatentVAE forward()')
         input_tensor = input_data['data']
         timestamp = input_data['timestamp']
-
-        # print(f'shape of input_tensor: {input_tensor.shape}')
-        # print(f'shape of timestamp: {timestamp.shape}')
 
         mu, log_var = self.encode(input_tensor)
         z = self.reparameterize(mu, log_var)
         output = self.decode(z, timestamp=timestamp)
 
-        # print()
-
         return [output, input_tensor, mu, log_var]
 
     def loss_function(self, recons, input, mu, log_var, **kwargs):
-        # print(f'loss_function()')
-        #
-        # print(f'shape of recons: {recons.shape}')
-        # print(f'shape of input: {input.shape}')
-        # print(f'shape of mu: {mu.shape}')
-        # print(f'shape of log_var: {log_var.shape}')
-        noise_std_ = torch.zeros(recons.size()) + self.noise_std
-        # print(f'shape of noise_std_: {noise_std_.shape}')
-        noise_logvar = (2. * torch.log(noise_std_)).to(kwargs['device'])
-
-        # print(f'shape of noise_nogvar: {noise_logvar.shape}')
-        logpx = torch.mean(log_normal_pdf(input, recons, noise_logvar).sum(-1).sum(-1))
-        # print(f'shape of logpx: {logpx.shape}')
+        recons_loss = F.mse_loss(recons, input)
         analytic_kl = torch.mean(normal_kl(mu,
                                            log_var,
                                            torch.zeros(mu.size()).to(kwargs['device']),
                                            torch.zeros(log_var.size()).to(kwargs['device']),
                                            device=kwargs['device']).sum(-1))
 
-        # print(f'shape of analytic_kl: {analytic_kl.shape}')
-        loss = torch.mean(-logpx + analytic_kl, dim=0)
-        # print(f'shape of loss: {loss.shape}')
-        # print()
+        loss = torch.mean(recons_loss + analytic_kl, dim=0)
+        return {'loss': loss, 'reconstruction_loss': recons_loss, 'kl-divergence': analytic_kl}
 
-        return {'loss': loss, 'reconstruction_loss': -logpx, 'kl-divergence': analytic_kl}
+
+def loss_function( recons, input, mu, log_var, **kwargs):
+    recons_loss = F.mse_loss(recons, input)
+    analytic_kl = torch.mean(normal_kl(mu,
+                                       log_var,
+                                       torch.zeros(mu.size()).to(kwargs['device']),
+                                       torch.zeros(log_var.size()).to(kwargs['device']),
+                                       device=kwargs['device']).sum(-1))
+
+    loss = torch.mean(recons_loss + analytic_kl, dim=0)
+    return {'loss': loss, 'reconstruction_loss': recons_loss, 'kl-divergence': analytic_kl}
 
 
 def log_normal_pdf(x, mean, logvar):
     const = torch.from_numpy(np.array([2. * np.pi])).float().to(x.device)
     const = torch.log(const)
     pdf = -.5 * (const + logvar + (x - mean) ** 2. / torch.exp(logvar))
-    # print(f'shape of log normal pdf: {pdf.shape}')
     return pdf
 
 
