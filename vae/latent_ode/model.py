@@ -136,6 +136,18 @@ class LatentVAE(BaseVAE):
         return {'loss': loss, 'reconstruction_loss': recons_loss, 'kl-divergence': analytic_kl}
 
 
+def loss_function( recons, input, mu, log_var, **kwargs):
+    recons_loss = F.mse_loss(recons, input)
+    analytic_kl = torch.mean(normal_kl(mu,
+                                       log_var,
+                                       torch.zeros(mu.size()).to(kwargs['device']),
+                                       torch.zeros(log_var.size()).to(kwargs['device']),
+                                       device=kwargs['device']).sum(-1))
+
+    loss = torch.mean(recons_loss + analytic_kl, dim=0)
+    return {'loss': loss, 'reconstruction_loss': recons_loss, 'kl-divergence': analytic_kl}
+
+
 def log_normal_pdf(x, mean, logvar):
     const = torch.from_numpy(np.array([2. * np.pi])).float().to(x.device)
     const = torch.log(const)

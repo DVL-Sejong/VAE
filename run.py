@@ -2,7 +2,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from vae import CelebALoader, CelebAVAE, LatentODELoader, LatentVAE, LossLogger, Tensor
+from vae import CelebALoader, CelebAVAE, LatentODELoader, LatentVAE, LossLogger, Tensor, loss_function
 from os.path import abspath, join, isdir
 from pathlib import Path
 
@@ -14,6 +14,7 @@ import re
 
 from torch.utils.data import DataLoader
 import torch.optim as optim
+import torch.nn as nn
 import torch
 
 
@@ -141,9 +142,9 @@ def train(epoch: int, model, train_loader: DataLoader, optimizer: optim.Adam,
 
         data2_name = 'labels' if isinstance(model, CelebAVAE) else 'timestamp'
         recons, input, mu, log_var = model.forward({'data': data1, data2_name: data2})
-        loss_dict = model.loss_function(recons, input, mu, log_var,
-                                        kld_weight=kld_weight,
-                                        device=device)
+        loss_dict = loss_function(recons, input, mu, log_var,
+                                  kld_weight=kld_weight,
+                                  device=device)
         logger.update_temp_loss(loss_dict, i)
         train_loss = loss_dict['loss']
         train_loss.backward()
@@ -172,9 +173,9 @@ def validate(epoch: int, model, val_loader: DataLoader, kdl_weight: float, logge
 
             data2_name = 'labels' if isinstance(model, CelebAVAE) else 'timestamp'
             recons, input, mu, log_var = model.forward({'data': data1, data2_name: data2})
-            loss_dict = model.loss_function(recons, input, mu, log_var,
-                                            kld_weight=kdl_weight,
-                                            device=device)
+            loss_dict = loss_function(recons, input, mu, log_var,
+                                      kld_weight=kdl_weight,
+                                      device=device)
             logger.update_temp_loss(loss_dict, i)
 
     if epoch % 30 == 0:
@@ -200,9 +201,9 @@ def test(model, test_loader: DataLoader, kdl_weight: float, logger: LossLogger, 
 
             data2_name = 'labels' if isinstance(model, CelebAVAE) else 'timestamp'
             recons, input, mu, log_var = model.forward({'data': data1, data2_name: data2})
-            loss_dict = model.loss_function(recons, input, mu, log_var,
-                                            kld_weight=kdl_weight,
-                                            device=device)
+            loss_dict = loss_function(recons, input, mu, log_var,
+                                      kld_weight=kdl_weight,
+                                      device=device)
             logger.update_temp_loss(loss_dict, i)
 
             fig_path = join(logger.path_dict['test'], f'test_{i:>03}.png')
@@ -244,6 +245,8 @@ def latent_ode_main(device: torch.device, path_dict: dict, **kwargs):
                       n_hidden=kwargs['model_params']['hidden_dim'],
                       noise_std=kwargs['data_params']['noise_std'],
                       device=device).cuda()
+
+    model = nn.DataParallel(model)
 
     data_loader = LatentODELoader(batch_size=kwargs['exp_params']['batch_size'],
                                   n_frames=kwargs['data_params']['n_frames'],
